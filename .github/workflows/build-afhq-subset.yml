@@ -1,0 +1,90 @@
+name: Build AFHQ Teachable Machine subset
+
+on:
+  push:
+    branches:
+      - chatgpt-afhq-dataset
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch AFHQ photo source
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/Shaun07a/Animal-Face-Classification-Using-MobileNetV2.git src
+          cd src
+          git sparse-checkout set afhq/train/cat afhq/train/dog afhq/train/wild afhq/val/cat afhq/val/dog afhq/val/wild
+
+      - name: Build balanced training and test folders
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p subset/train/{cat,dog,wild} subset/test/{cat,dog,wild}
+
+          for cls in cat dog wild; do
+            i=0
+            while IFS= read -r f; do
+              cp "$f" "subset/train/$cls/"
+              i=$((i+1))
+              [ "$i" -ge 40 ] && break
+            done < <(find "src/afhq/train/$cls" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) | sort)
+
+            i=0
+            while IFS= read -r f; do
+              cp "$f" "subset/test/$cls/"
+              i=$((i+1))
+              [ "$i" -ge 5 ] && break
+            done < <(find "src/afhq/val/$cls" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) | sort)
+          done
+
+          cat > subset/README.txt <<'EOF'
+Teachable Machine real-photo dataset
+
+Training:
+- cat: 40 real AFHQ photographs
+- dog: 40 real AFHQ photographs
+- wild: 40 real AFHQ photographs
+
+Testing:
+- cat: 5 separate photographs
+- dog: 5 separate photographs
+- wild: 5 separate photographs
+
+Use only the train folders when training your Teachable Machine model.
+After training, use the separate test folders for Step 4 testing.
+
+Source: AFHQ (Animal Faces-HQ), introduced with StarGAN v2.
+Official project: https://github.com/clovaai/stargan-v2
+These files were selected from a public GitHub mirror of the AFHQ folder structure:
+https://github.com/Shaun07a/Animal-Face-Classification-Using-MobileNetV2
+
+AFHQ is intended for non-commercial research/educational use under the source project's license terms.
+EOF
+
+          python - <<'PY'
+          import os
+          from PIL import Image
+          for split in ("train","test"):
+              for cls in ("cat","dog","wild"):
+                  p=f"subset/{split}/{cls}"
+                  files=[x for x in os.listdir(p) if x.lower().endswith((".jpg",".jpeg",".png"))]
+                  expected=40 if split=="train" else 5
+                  assert len(files)==expected, (split,cls,len(files))
+                  for fn in files:
+                      with Image.open(os.path.join(p,fn)) as im:
+                          im.verify()
+          print("Validated 135 image files.")
+          PY
+
+          (cd subset && zip -r ../Teachable_Machine_Real_Cat_Dog_Wild.zip .)
+
+      - name: Upload ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Teachable_Machine_Real_Cat_Dog_Wild
+          path: Teachable_Machine_Real_Cat_Dog_Wild.zip
+          compression-level: 0
+          retention-days: 1
